@@ -41,6 +41,13 @@ func RequestLogger(logger *slog.Logger, o *Options) func(http.Handler) http.Hand
 			logReqBody := o.LogRequestBody != nil && o.LogRequestBody(r)
 			logRespBody := o.LogResponseBody != nil && o.LogResponseBody(r)
 
+			hasReqBody := r.Body != nil && r.Body != http.NoBody
+			var bodyReader *countingReader
+			if hasReqBody {
+				bodyReader = &countingReader{reader: r.Body}
+				r.Body = bodyReader
+			}
+
 			var includeAdditionalAttrsReqBody bool
 			if o.LogAdditionalAttrs != nil {
 				if o.LogAdditionalAttrs.AdditionalAttrs != nil && o.LogAdditionalAttrs.IncludeRequestBody != nil {
@@ -49,7 +56,6 @@ func RequestLogger(logger *slog.Logger, o *Options) func(http.Handler) http.Hand
 			} else if o.LogExtraAttrs != nil {
 				includeAdditionalAttrsReqBody = true
 			}
-			hasReqBody := r.Body != nil && r.Body != http.NoBody
 			consumeBody := hasReqBody && (logReqBody || includeAdditionalAttrsReqBody)
 
 			var reqBody bytes.Buffer
@@ -134,6 +140,10 @@ func RequestLogger(logger *slog.Logger, o *Options) func(http.Handler) http.Hand
 					return
 				}
 
+				reqBytes := r.ContentLength
+				reqBytesRead := bytesRead(bodyReader)
+				respBytesWritten := ww.BytesWritten()
+
 				logAttrs = appendAttrs(logAttrs,
 					slog.String(s.RequestURL, requestURL(r)),
 					slog.String(s.RequestMethod, r.Method),
@@ -143,13 +153,14 @@ func RequestLogger(logger *slog.Logger, o *Options) func(http.Handler) http.Hand
 					slog.String(s.RequestScheme, scheme(r)),
 					slog.String(s.RequestProto, r.Proto),
 					slog.Any(s.RequestHeaders, slog.GroupValue(getHeaderAttrs(r.Header, o.LogRequestHeaders)...)),
-					slog.Int64(s.RequestBytes, r.ContentLength),
+					slog.Int64(s.RequestBytes, reqBytes),
+					slog.Int64(s.RequestBytesRead, reqBytesRead),
 					slog.String(s.RequestUserAgent, r.UserAgent()),
 					slog.String(s.RequestReferer, r.Referer()),
 					slog.Any(s.ResponseHeaders, slog.GroupValue(getHeaderAttrs(ww.Header(), o.LogResponseHeaders)...)),
 					slog.Int(s.ResponseStatus, statusCode),
 					slog.Float64(s.ResponseDuration, float64(duration.Milliseconds())),
-					slog.Int(s.ResponseBytes, ww.BytesWritten()),
+					slog.Int(s.ResponseBytes, respBytesWritten),
 				)
 
 				if err := ctx.Err(); errors.Is(err, context.Canceled) {
@@ -175,9 +186,11 @@ func RequestLogger(logger *slog.Logger, o *Options) func(http.Handler) http.Hand
 						logAttrs = appendAttrs(logAttrs, o.LogAdditionalAttrs.AdditionalAttrs(&LogDetails{
 							Request:            r,
 							RequestBody:        reqBody.String(),
+							RequestBytes:       reqBytes,
+							RequestBytesRead:   reqBytesRead,
 							RequestBytesUnread: reqUnreadBytes,
 							ResponseStatus:     statusCode,
-							ResponseBytes:      ww.BytesWritten(),
+							ResponseBytes:      respBytesWritten,
 						})...)
 					}
 				} else if o.LogExtraAttrs != nil {
@@ -255,4 +268,19 @@ func logBody(body *bytes.Buffer, header http.Header, o *Options) string {
 		}
 	}
 	return fmt.Sprintf("[body redacted for Content-Type: %s]", contentType)
+}
+
+type countingReader struct {
+	reader    io.ReadCloser
+	bytesRead int64
+}
+
+func (cr *countingReader) Read(p []byte) (int, error) {
+	n, err := cr.reader.Read(p)
+	cr.bytesRead += int64(n)
+	return n, err
+}
+
+func (cr *countingReader) Close() error {
+	return cr.reader.Close()
 }

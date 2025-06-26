@@ -145,6 +145,10 @@ type LogDetails struct {
 	Request *http.Request
 	// Contains the request body if either Options.LogRequestBody or LogAdditionalAttrsOptions.IncludeRequestBody is true, otherwise it is empty.
 	RequestBody string
+	// Contains the length of the request as indicated by the Content-Length header.
+	RequestBytes int64
+	// Contains the number of bytes read from the request body
+	RequestBytesRead int64
 	// Contains the number of unread bytes from the request body if either Options.LogRequestBody or LogAdditionalAttrsOptions.IncludeRequestBody is true, otherwise it is 0.
 	RequestBytesUnread int64
 	ResponseStatus     int
